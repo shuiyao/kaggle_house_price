@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 import seaborn as sns
 from scipy.stats import skew, pearsonr
 
@@ -15,7 +16,7 @@ if 'train' not in globals():
 # Always First: Understanding Y:
 def study_y(plot=False):
     if(plot == True):
-        sns.distplot(train['SalePrice'])
+        sns.displot(train['SalePrice'])
     print("Statistics of the target variable: ")
     print("--------------------------------")
     print(train['SalePrice'].describe())
@@ -54,7 +55,7 @@ def study_variable_correlations(data, limit_score=1.0):
 # e.g. train['PoolQC'].dropna()
 # e.g. train['PoolQC'].value_counts()
 
-# Often we want to pick out features that are mostly NULL.
+# Often we want to drop features that are mostly NULL.
 # (doubtful) We will discard them if they are not strong indicators of Y.
 # Should we discard features that have many missing values? It depends. For example, considering some houses that used to be hosted by very famous people or have experienced some bad rumors (though this sample doesn't have these kinds of information), this single feature will likely dominate its saleprice even though most houses do not have these features. Ignoring these features may lead to drastic over or under estimate of the house price. 
 def study_missing_data(data):
@@ -160,11 +161,15 @@ def pairplot_multi_variables(data, cols):
     for ax in p.axes.reshape(-1):
         if(ax == None): continue
         if(ax.get_xlabel() == 'SalePrice'):
-            xlabels = ['{:,.0f}'.format(x) + 'k' for x in ax.get_xticks()/1000]
+            ticks_loc = ax.get_xticks().tolist()
+            ax.xaxis.set_major_locator(mpl.ticker.FixedLocator(ticks_loc))
+            xlabels = ['{:,.0f}'.format(x/1000) + 'k' for x in ticks_loc]
             ax.set_xticklabels(xlabels)
         if(ax.get_ylabel() == 'SalePrice'):
-            ylabels = ['{:,.0f}'.format(y) + 'k' for y in ax.get_yticks()/1000]
-            ax.set_yticklabels(ylabels)
+            ticks_loc = ax.get_yticks().tolist()
+            ax.yaxis.set_major_locator(mpl.ticker.FixedLocator(ticks_loc))
+            ylabels = ['{:,.0f}'.format(y/1000) + 'k' for y in ticks_loc]
+            ax.set_yticklabels(ylabels)        
     return p
 
 # Data Cleaning and Feature Selection
@@ -182,7 +187,7 @@ def pairplot_multi_variables(data, cols):
 # vars_sparse = study_missing_data()
 
 # # Check if SalePrice is strongly correlated with these sparse features
-# fig, axs = boxplot_multi_variables(vars_sparse.columns[:], fignum="sparse_variables")
+# fig, axs = boxplot_mutli_variables(vars_sparse.columns[:], fignum="sparse_variables")
 
 # barplot_categorical_variables("CentralAir")
 
@@ -245,7 +250,7 @@ reg_rf = RandomForestRegressor()
 import json
 # Drop features that will not be used in modeling
 # Combines features that would be dropped:
-drop_features = ["MiscFeature"]
+drop_features = ["Id"]
 drop_features += vars_sparse.columns.tolist()
 drop_features += vars_leaky
 drop_features += vars_collinear
