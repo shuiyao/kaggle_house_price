@@ -1,0 +1,143 @@
+{
+    "ExterQual":
+    {
+	"Ex": 0,
+	"Gd": 1,
+	"TA": 2,
+	"Fa": 3,
+	"Po": 4	
+    },
+    "ExterCond":
+    {
+	"Ex": 0,
+	"Gd": 1,
+	"TA": 2,
+	"Fa": 3,
+	"Po": 4	
+    },
+    "BsmtQual":
+    {
+	"Ex": 0,
+	"Gd": 1,
+	"TA": 2,
+	"Fa": 3,
+	"Po": 4,
+	"NA": 5
+    },
+    "BsmtCond":
+    {
+	"Ex": 0,
+	"Gd": 1,
+	"TA": 2,
+	"Fa": 3,
+	"Po": 4,
+	"NA": 5
+    },
+    "BsmtExposure":
+    {
+	"Gd": 0,
+	"Av": 1,
+	"Mn": 2,
+	"No": 3,
+	"NA": 4
+    },
+    "BsmtFinType1":
+    {
+	"GdQ": 0,
+	"ALQ": 1,
+	"BLQ": 2,
+	"Rec": 3,
+	"LwQ": 4,
+	"Unf": 5,
+	"NA": 6	
+    },
+    "BsmtFinType1":
+    {
+	"GLQ": 0,
+	"ALQ": 1,
+	"BLQ": 2,
+	"Rec": 3,
+	"LwQ": 4,
+	"Unf": 5,
+	"NA": 6	
+    },
+    "BsmtFinType2":
+    {
+	"GLQ": 0,
+	"ALQ": 1,
+	"BLQ": 2,
+	"Rec": 3,
+	"LwQ": 4,
+	"Unf": 5,
+	"NA": 6	
+    },
+    "HeatingQC":
+    {
+	"Ex": 0,
+	"Gd": 1,
+	"TA": 2,
+	"Fa": 3,
+	"Po": 4
+    },
+    "CentralAir":
+    {
+	"N": 0,
+	"Y": 1
+    },
+    "KitchenQual":
+    {
+	"Ex": 0,
+	"Gd": 1,
+	"TA": 2,
+	"Fa": 3,
+	"Po": 4
+    },
+    "FireplaceQu":
+    {
+	"Ex": 0,
+	"Gd": 1,
+	"TA": 2,
+	"Fa": 3,
+	"Po": 4,
+	"NA": 5
+    },
+    "GarageFinish":
+    {
+	"Fin": 0,
+	"RFn": 1,
+	"Unf": 2,
+	"NA": 3
+    },
+    "GarageQual":
+    {
+	"Ex": 0,
+	"Gd": 1,
+	"TA": 2,
+	"Fa": 3,
+	"Po": 4,
+	"NA": 5
+    },
+    "GarageCond":
+    {
+	"Ex": 0,
+	"Gd": 1,
+	"TA": 2,
+	"Fa": 3,
+	"Po": 4,
+	"NA": 5
+    },
+    "PavedDrive":
+    {
+	"Y": 0,
+	"P": 1,
+	"N": 2	
+    },
+    "PoolQC":
+    {
+	"Ex": 0,
+	"Gd": 1,
+	"TA": 2,
+	"Fa": 3,
+	"NA": 4
+    }
+}
