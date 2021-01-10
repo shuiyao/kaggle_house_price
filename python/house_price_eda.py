@@ -151,7 +151,7 @@ def boxplot_multi_variables(cols, height=2.5, max_features=16, fignum="boxplot_m
     fig.subplots_adjust(hspace=0.2, wspace=0, top=0.9)
     return fig, axs
 
-def pairplot_multi_variables(data, cols):
+def pairplot_multi_variables(data, cols, showindex=False):
     sns.set(style="ticks", font_scale=0.6)
     p = sns.pairplot(data[cols], height=1.5, corner=True, plot_kws={"s":5})
     # can use kind="hist"
@@ -184,14 +184,13 @@ def pairplot_multi_variables(data, cols):
 # 4. Feature scaling
 # 5. Encoding
 
-# vars_sparse = study_missing_data()
+#vars_sparse = study_missing_data(train)
 
 # # Check if SalePrice is strongly correlated with these sparse features
 # fig, axs = boxplot_mutli_variables(vars_sparse.columns[:], fignum="sparse_variables")
 
 # barplot_categorical_variables("CentralAir")
 
-# corrs = study_variable_correlations(train, limit_score=0.3)
 
 # p = pairplot_multi_variables(['GarageYrBlt', 'YearBuilt', 'SalePrice'])
 # p = pairplot_multi_variables(['GarageCars', 'GarageArea', 'SalePrice'])
@@ -229,8 +228,13 @@ vars_leaky = ['MoSold', 'YrSold', 'SaleType', 'SaleCondition']
 
 # Scatter plot for features that are strongly correlated with SalePrice. Identify outliers.
 # Do it after data cleaning.
-# cols = corrs.nlargest(6, columns='pearson')
-# p = pairplot_multi_variables(cols.index)
+
+# corrs = study_variable_correlations(train, limit_score=0.3)
+# cols = corrs.nlargest(6, columns='spearman')
+# p = pairplot_multi_variables(train, cols.index)
+
+outliers = train[train['GrLivArea'] > 4000].index
+outliers.union(train[train['GarageArea'] > 1200].index)
 
 #plt.show()
 
@@ -292,16 +296,17 @@ ct = ColumnTransformer(transformers= \
 X_train, X_test, y_train, y_test = \
     train_test_split(X, y, test_size=0.3, random_state=120)
 
-ppl_rf = Pipeline(steps = [('ct', ct), ('rf', reg_rf)])
-ppl_rf.fit(X_train, y_train)
-# First, check score to see if the fitted model is reasonable
-print("r2 score (RandomForest): %f" % (ppl_rf.score(X_test, y_test)))
+# ppl_rf = Pipeline(steps = [('ct', ct), ('rf', reg_rf)])
+# ppl_rf.fit(X_train, y_train)
+# # First, check score to see if the fitted model is reasonable
+# print("r2 score (RandomForest): %f" % (ppl_rf.score(X_test, y_test)))
 
-print("Analyzing feature importance using permutation method: ")
 # Now how to extract feature importance from the fitted model? In simpler applications, the model has attributes such as coef_ and feature_importance_ that directly estimates the importance of any given feature. However there are two concerns: 1. The feature_importance_ are often estimated from the training data where the model may overfit. 2. It is hard to map the feature_importance_ metric to the original features if the data has gone through some transformations such as the OneHotEncoder for categorical features, which expands the feature space.
 # permuation_importance() provides a very convenient way of evaluating the feature importance on a hold-out test set. However, the results may be degraded if many features are correlated.
-perm_result = permutation_importance(ppl_rf, X_test, y_test, n_repeats=10, random_state=24)
-perm_sorted_idx = perm_result.importances_mean.argsort()[::-1]
+
+# print("Analyzing feature importance using permutation method: ")
+# perm_result = permutation_importance(ppl_rf, X_test, y_test, n_repeats=10, random_state=24)
+# perm_sorted_idx = perm_result.importances_mean.argsort()[::-1]
 
 def show_important_features(perm_result, X):
     '''
@@ -338,5 +343,46 @@ def show_important_features(perm_result, X):
     fig.subplots_adjust(left=0.2)
     plt.show()
 
-show_important_features(perm_result, X)
+#show_important_features(perm_result, X)
+
+# Outliers
+# --------------------------------
+from sklearn.ensemble import IsolationForest
+
+#rng = np.random.RandomState(42)
+corrs = train.corrwith(train['SalePrice'], method='spearman').sort_values(ascending=False)
+clf = IsolationForest(max_samples=200, random_state=42, contamination=0.01)
+Xtrain = ct.fit_transform(X)
+
+# clrs = ["blue" if y == 1 else "red" for y in pred]
+markers = {1: ".", -1:"X", -2:"X"}
+# palette = sns.color_palette()
+# plt.scatter(train['GrLivArea'], train['SalePrice'], s=6, color=clrs, marker=".")
+
+clf.fit(Xtrain)
+pred = clf.predict(Xtrain)
+y = clf.decision_function(Xtrain)
+
+fig, axs = plt.subplots(3, 3, num="outliers", figsize=(10, 10), sharey=True)
+axs = axs.flatten()
+for i, var in enumerate(corrs.index[1:10]):
+    ax = axs[i]
+    # sns.scatterplot(x=train[var], y=train['SalePrice'], \
+    #                 hue=pred, style=pred, palette="tab10", \
+    #                 markers=markers, hue_order=[1,-1,-2], ax=ax, legend=False)
+    sns.scatterplot(x=train[var], y=train['SalePrice'], \
+                    hue=y, style=pred, \
+                    markers=markers, \
+                    palette="rocket", ax=ax, legend=False)
+    if(i % 3): ax.set_ylabel("")
+    xlabel = ax.get_xlabel()
+    ax.text(0.95, 0.85, xlabel, transform=ax.transAxes, ha='right', fontsize=10)
+    ax.set_xlabel("")
+    ticks_loc = ax.get_yticks().tolist()
+    ax.yaxis.set_major_locator(mpl.ticker.FixedLocator(ticks_loc))
+    ylabels = ['{:,.0f}'.format(y/1000) + 'k' for y in ticks_loc]
+    ax.set_yticklabels(ylabels)        
+    
+plt.show()
+
 print("Done.")

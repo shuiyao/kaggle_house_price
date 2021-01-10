@@ -3,23 +3,34 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from scipy.stats import uniform
+from scipy.stats import uniform, skew
+from scipy.special import boxcox1p, inv_boxcox1p
 
 from sklearn import set_config
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV, ShuffleSplit, learning_curve, cross_val_score
+from sklearn.preprocessing import OneHotEncoder, StandardScaler, RobustScaler
+from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV, ShuffleSplit, learning_curve, cross_val_score, KFold
+from sklearn.inspection import permutation_importance
 
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, StackingRegressor
 from sklearn.linear_model import LinearRegression, SGDRegressor, Ridge, Lasso
 import xgboost as xgb
 from xgboost import XGBRegressor
 
+from category_encoders.target_encoder import TargetEncoder
+
 from sklearn import metrics
 
 import joblib
+import json
+
+
+
+
+train_test_split_random_state = 120
+train_test_split_random_state = 230
 
 def display_estimator_parameters_for_pipeline(ppl):
     '''
@@ -54,7 +65,8 @@ def examine_learning_curve(ppl, X, y, n_splits=5):
     cv = ShuffleSplit(n_splits=n_splits, test_size=0.2, random_state=12)
     lc_sizes, lc_train, lc_cv, lc_time, _ = \
         learning_curve(ppl, X, y, cv=cv, return_times=True, \
-                       train_sizes=np.linspace(0.1, 0.8, 8))
+                       train_sizes=np.linspace(0.1, 1.0, 9),
+                       scoring = 'neg_root_mean_squared_error')
     # score vs. size
     ax = axs.flatten()[0]
     x, y, dy = lc_sizes, lc_train.mean(axis=1), lc_train.std(axis=1)
@@ -81,57 +93,190 @@ def examine_learning_curve(ppl, X, y, n_splits=5):
 # Based on result from the explorative data analysis (EDA)
 # ================================================================
 
-cols_leaky = ['Id', 'MoSold', 'YrSold', 'SaleType', 'SaleCondition']
-
 print("Loading data from train.csv.")
-train = pd.read_csv("train.csv")
-train.info()
-
-print("Dropping leaky features.")
+train = pd.read_csv("../data/train.csv")
 m = train.shape[0]
-train.drop(cols_leaky, axis=1, inplace=True)
 
-# Log transform
-train['SalePrice'] = np.log1p(train['SalePrice'])
+# Re-define train_derived
+train_derived = train.copy()
+
+# outliers = train[train['GrLivArea'] > 4000].index
+# outliers.union(train[train['GarageArea'] > 1200].index)
+
+# outliers = train[(train['GrLivArea']>4000) & (train['SalePrice']<300000)].index
+
+# ----------------------------------------------------------------
+from collections import Counter
+num_col = train.loc[:,'MSSubClass':'SaleCondition'].select_dtypes(exclude=['object']).columns
+# Outlier detection 
+
+def detect_outliers(df,n,features):
+    """
+    Takes a dataframe df of features and returns a list of the indices
+    corresponding to the observations containing more than n outliers according
+    to the Tukey method.
+    """
+    outlier_indices = []
+    
+    # iterate over features(columns)
+    for col in features:
+        # 1st quartile (25%)
+        Q1 = np.percentile(df[col], 25)
+        # 3rd quartile (75%)
+        Q3 = np.percentile(df[col],75)
+        # Interquartile range (IQR)
+        IQR = Q3 - Q1
+        
+        # outlier step
+        outlier_step = 3.0 * IQR ## increased to 1.7
+        
+        # Determine a list of indices of outliers for feature col
+        outlier_list_col = df[(df[col] < Q1 - outlier_step) | (df[col] > Q3 + outlier_step )].index
+        
+        # append the found outlier indices for col to the list of outlier indices 
+        outlier_indices.extend(outlier_list_col)
+        
+    # select observations containing more than 2 outliers
+    outlier_indices = Counter(outlier_indices)        
+    multiple_outliers = list( k for k, v in outlier_indices.items() if v > n )
+    
+    return multiple_outliers   
+
+# detect outliers 
+Outliers_to_drop = detect_outliers(train,2, num_col)
+# ----------------------------------------------------------------
+
+train_derived = train_derived.drop(outliers)
+#train_derived = train_derived.drop(Outliers_to_drop)
+
+# Dropping outliers improves RMSE by 0.004
+
+# Drop features that will not be used in modeling
+# Combines features that would be dropped:
+drop_features = ["Id","Utilities","Street"]
+drop_features += ['Alley', 'PoolQC', 'Fence', 'MiscFeature'] # sparse features
+#drop_features += ['MoSold', 'YrSold', 'SaleType', 'SaleCondition']
+
+for var in drop_features:
+    if(var in train_derived):
+        # print("Drop feature: ", var)
+        train_derived = train_derived.drop(var, axis=1)
+
+#Hard code the ordinal features using a .json file
+with open('ordinal.json',) as f:
+    ordinal_feature_encoder = json.load(f)
+train_derived = train_derived.replace(ordinal_feature_encoder)
+
+# MSSubClass is a nominal (categorical) feature but is encoded with numerics
+train_derived['MSSubClass'] = train_derived['MSSubClass'].astype('object')
+
+for col in ['MSSubClass', 'MoSold', 'YrSold', 'SaleType', 'SaleCondition']:
+    train_derived[col] = train_derived[col].astype('object')
+
+vars_fill_zero = ['BsmtFinSF1', 'BsmtFinSF2', 'BsmtUnfSF', 'TotalBsmtSF', 'MasVnrArea', 'GarageArea', 'BsmtFullBath', 'BsmtHalfBath', 'GarageCars']
+
+ord_features = pd.Index(ordinal_feature_encoder.keys()).join(X_train.columns, how='inner')
+
+for var in vars_fill_zero:
+    train_derived[var] = train_derived[var].fillna(0)
+for var in ord_features:
+    train_derived[var] = train_derived[var].fillna(0)
+
+train_derived['TotalSF'] = train_derived['TotalBsmtSF'] + train_derived['1stFlrSF'] + train_derived['2ndFlrSF']    
+
+# --------------------------------
+# train_derived['LotFrontage'] = train_derived.groupby('Neighborhood')['LotFrontage'].transform(lambda x: x.fillna(x.median()))
+
+
+# https://www.kaggle.com/dmkravtsov/3-2-house-prices
+
+# train_derived['AllSF'] = train_derived['GrLivArea'] + train_derived['TotalBsmtSF']
+# train_derived['Area'] = train_derived['LotArea'] * train_derived['LotFrontage']
+# train_derived['Area_log'] = np.log1p(train_derived['Area'])
+# train_derived['Is_MasVnr'] = [1 if i != 0 else 0 for i in train_derived['MasVnrArea']]
+# train_derived['Is_BsmtFinSF1'] = [1 if i != 0 else 0 for i in train_derived['BsmtFinSF1']]
+# train_derived['Is_BsmtFinSF2'] = [1 if i != 0 else 0 for i in train_derived['BsmtFinSF2']]
+# train_derived['Is_BsmtUnfSF'] = [1 if i != 0 else 0 for i in train_derived['BsmtUnfSF']]
+# train_derived['Is_TotalBsmtSF'] = [1 if i != 0 else 0 for i in train_derived['TotalBsmtSF']]
+# train_derived['Is_LowQualFinSF'] = [1 if i != 0 else 0 for i in train_derived['LowQualFinSF']]
+# train_derived['Is_GarageArea'] = [1 if i != 0 else 0 for i in train_derived['GarageArea']]
+# train_derived['Is_WoodDeckSF'] = [1 if i != 0 else 0 for i in train_derived['WoodDeckSF']]
+# train_derived['Is_OpenPorchSF'] = [1 if i != 0 else 0 for i in train_derived['OpenPorchSF']]
+# train_derived['Is_EnclosedPorch'] = [1 if i != 0 else 0 for i in train_derived['EnclosedPorch']]
+# train_derived['Is_3SsnPorch'] = [1 if i != 0 else 0 for i in train_derived['3SsnPorch']]
+# train_derived['Is_ScreenPorch'] = [1 if i != 0 else 0 for i in train_derived['ScreenPorch']]
+
+
+# --------------------------------
+
+# Prepare data for training
+y = train_derived['SalePrice']
+X = train_derived.drop('SalePrice', axis=1)
+
+num_features = X.select_dtypes(['int', 'float']).columns
+#Log transform all skewed features
+
+vars_skewed = []
+
+def transform_skewed_variables(arr, method='log1p'):
+    if(method == "log1p"): return np.log1p(arr)
+    if(method == "boxcox"): return boxcox1p(arr, 0.15)
+
+method_skewed = 'boxcox'
+for col in num_features:
+    if(abs(skew(train_derived[col])) > 1.0):
+        vars_skewed.append(col)
+        # print("%-24s %f" % (col, skew(train_derived[col])))
+        train_derived[col] = transform_skewed_variables(train_derived[col], method=method_skewed)
+train_derived['SalePrice'] = np.log1p(train_derived['SalePrice'])
 
 # Now separate the training data into training and test set.
 # The "test set" here is actually a hold-out cross validation set used to test if our ML models perform well. Later, we split the "train set" into k-Fold train/cross validation sets in order to find the hyperparameters that optimize average scores on the train/cv split. Finally we will use the optimized model on the hold-out set, before we apply it to the "real" test set provided in the test.csv file.
 print("Separating train and test (hold-out cross-validation) set.")
-X_train, X_test, y_train, y_test = \
-    train_test_split(train, train['SalePrice'], test_size=0.3, random_state=120)
 
-X_train.drop('SalePrice', axis=1, inplace=True)
-X_test.drop('SalePrice', axis=1, inplace=True)
+# Test with a small set of features
+# train_derived = train_derived[['Neighborhood', 'YearBuilt', 'SalePrice']]
+
+X_train, X_test, y_train, y_test = \
+    train_test_split(train_derived, train_derived['SalePrice'], test_size=0.3, random_state=train_test_split_random_state)
+
+# X_train, X_test, y_train, y_test = \
+#     train_test_split(train, train['SalePrice'], test_size=0.3, random_state=120)
+
+X_train = X_train.drop('SalePrice', axis=1)
+X_test = X_test.drop('SalePrice', axis=1)
+
+# te = TargetEncoder(cols = ['Neighborhood'])
+# te.fit(X_train, y_train)
+# X_train = te.transform(X_train)
+# X_test = te.transform(X_test)
 
 # Caveat: 
 # An error raises if one passes DataFrame to the ColumnTransformer:
 # "No valid specification of the columns. Only a scalar, list or slice of all integers or all strings, or boolean mask is allowed"
 # Instead, one should pass indices (DataFrame.columns)
+
 num_features = X_train.select_dtypes(['int', 'float']).columns
 cat_features = X_train.select_dtypes('object').columns
 
+from sklearn.svm import SVR
+from lightgbm import LGBMRegressor
+
 model_lr = LinearRegression() # Toy model
 model_sgd = SGDRegressor() # Linear Regressor with Stochastic Gradient Descent
-model_ridge = Ridge()
-model_lasso = Lasso(alpha=1.0)
-model_rf = RandomForestRegressor() # Random Forest Decision Tree
-model_xgb = XGBRegressor() # Extreme Gradient Boosting Decision Tree
+model_ridge = Ridge(alpha=10.0)
+model_lasso = Lasso(alpha=0.0003, max_iter=1.e5)
+model_rf = RandomForestRegressor(n_estimators=400, max_features='sqrt', max_depth=100, min_samples_split=2, min_samples_leaf=1) # Random Forest Decision Tree
+model_svr = SVR(C=20, epsilon=0.008, gamma=0.0003)
+model_lgbm = LGBMRegressor(objective='regression', num_leaves=6, learning_rate=0.01, n_estimators=1000, max_bin=200, bagging_fraction=0.8, bagging_freq=4, bagging_seed=8, feature_fraction=0.2, feature_fraction_seed=8, min_sum_hessian_in_leaf=11, verbose=-1, random_state=42)
+model_xgb = XGBRegressor(n_estimators=800, min_child_weight=3, max_depth=3, gamma=0, learning_rate=0.08, subsample=0.7, reg_lambda=0.1, reg_alpha=0.0, colsample_bytree=1.0) # Extreme Gradient Boosting Decision Tree
+
+# Best-fit values from https://www.kaggle.com/goldens/house-prices-on-the-top-with-simpl
+# model_xgb = XGBRegressor(colsample_bylevel = 0.6971640307744038, colsample_bytree = 0.6222251306452113, gamma = 0.045557016198868025, learning_rate = 0.012334455088591312, max_depth = 4, n_estimators = 2100, reg_lambda = 2.1713829044702413, subsample = 0.8459257473555255)
+
 # VotingRegressor()
-# StackRegressor()
 
 # Note: Sklearn UG says SGD is more suitable for large data (m > 10,000), otherwise use Lasso or Ridge
-
-# Let's try linear regression model first without using pipeline
-
-# imp_num = SimpleImputer()
-# imp_num.fit(num_features)
-# imp_num.transform(num_features)
-# imp_cat = SimpleImputer(strategy='constant', fill_value='zero')
-# imp_cat.fit(cat_features)
-# xcat = imp_cat.transform(cat_features)
-# ohe = OneHotEncoder(handle_unknown = 'ignore')
-# ohe.fit(xcat)
-# x = ohe.transform(xcat)
 
 print("Preparing the data for both numeric and categorical data.")
 # Numeric features
@@ -142,8 +287,9 @@ print("Preparing the data for both numeric and categorical data.")
 # Scaler: StandardScaler() standardizes continuous variable to (mean, std) = (0.,1.)
 
 ppl_num = Pipeline(steps = \
-    [('imp_num', SimpleImputer()), \
-     ('scaler', StandardScaler())] \
+    [('imp_num', SimpleImputer(strategy = 'median')), \
+     ('scaler', RobustScaler())] \     
+     # ('scaler', StandardScaler())] \
 )
 
 # Categorical features
@@ -159,8 +305,10 @@ ppl_num = Pipeline(steps = \
 # Useful arguments: handle_unknown = 'ignore'
 
 ppl_cat = Pipeline(steps = \
-    [('imp_cat', SimpleImputer(strategy='constant', fill_value='zero')), \
-     ('ohe', OneHotEncoder(handle_unknown='ignore'))] \
+    [
+    # ('imp_cat', SimpleImputer(strategy='constant', fill_value='none')), \
+    ('imp_cat', SimpleImputer(strategy='most_frequent')), \
+    ('ohe', OneHotEncoder(handle_unknown='ignore'))] \
 )
 
 ct = ColumnTransformer(transformers= \
@@ -174,7 +322,7 @@ models = [model_lr, model_ridge, model_lasso, model_sgd, model_rf, model_xgb]
 set_config(display="diagram")
 
 # Now train models with the different ML algorithms using default parameters
-def train_models(models, show_params=True):
+def train_models(models, show_params=False):
     for model in models:
         ppl_full = Pipeline(steps = [('ct', ct), ('model', model)])
         ppl_full.fit(X_train, y_train)
@@ -190,7 +338,7 @@ def train_models(models, show_params=True):
         print("----------------")
     return ppl_full
 
-# Explore the Hyperparameter Space
+ # Explore the Hyperparameter Space
 
 # ================================================================
 
@@ -207,10 +355,11 @@ def train_model_lasso_parameters_search(auto=True):
     ppl_lasso = Pipeline(steps = [('ct', ct), ('lasso', model_lasso)])
 
     if(auto): # Ues GridSearchCV to automatically search for optimal parameters
-        grid_params = {'lasso__alpha':[0.3, 1.0, 3.0, 10., 30., 100., 300., 1000.]}
+        grid_params = {'lasso__alpha':[1.e-5, 3.e-5, 0.0001, 0.0003, 0.001, 0.003, 0.1, 0.3]}
         reg_lasso = GridSearchCV(ppl_lasso, grid_params, \
                                  cv=5, verbose=3, n_jobs=-1, \
-                                 scoring = 'r2', return_train_score=True) # r2
+                                 scoring = 'neg_root_mean_squared_error',
+                                 return_train_score=True) # r2
         model = reg_lasso.fit(X_train, y_train)
         gcv_matrix = pd.DataFrame(model.cv_results_)
         gcv_bestpar = model.best_params_
@@ -229,7 +378,7 @@ def train_model_lasso_parameters_search(auto=True):
         print()
         print("Best Score (Hold-out): %7.5f" % (reg_lasso.score(X_test, y_test)))
         # Note: I found that the score from using the hold-out cross validation set could be much lower than the mean_test_score (or best_score_). The reason is likely due to high variance of the model. Using different values of random_state in the train_test_split() can lead to large fluctuations of the best scores from the GridSearchCV as well as the test score on the hold-out CV data. In addition, since the best scores from the GridSearchCV averages over several folds of a larger sample (X_train, 70% of the full sample), they are likely to be more constant and higher than the hold-out scores.
-        return model, reg_lasso
+        return model, reg_lasso.best_estimator_
     else:
         # Manually choose parameters and examine their performances
         # Use the same train/cv split
@@ -253,7 +402,7 @@ def train_model_lasso_parameters_search(auto=True):
         return _, _
 
 # Model: Random Forest Regressor
-def train_model_rf_parameters_search(auto=True, par=None):
+def train_model_rf_parameters_search(auto=True, par=None, ax=None):
     ppl_rf = Pipeline(steps = [('ct', ct), ('rf', model_rf)])
 
     if(auto):
@@ -289,29 +438,56 @@ def train_model_rf_parameters_search(auto=True, par=None):
         return model, reg_rf
     else: # manually examine parameters one by one
         # Best-fit parameters
-        ppl_rf.set_params(rf__n_estimators = 400, rf__max_features='sqrt', rf__max_depth=None, rf__min_samples_split = 5, rf__min_samples_leaf = 1)
-
-        params = {'rf__n_estimators':[50, 100, 200, 400, 800, 1600], \
-                  'rf__max_features':['auto', 'sqrt', 'log2'], \
-                  'rf__max_depth':[2, 5, 10, 20, 50, 100], \
+        params = {'rf__n_estimators':[50, 100, 200, 400, 800, 1600, 3200], \
+                  'rf__max_depth':[5, 10, 20, 50, 100, 200, 300, 400], \
                   'rf__min_samples_split':[2, 5, 10, 15, 20], \
-                  'rf__min_samples_leaf':[1, 2, 5, 10, 15]}
-        scores_train, scores_cv = [], []
+                  'rf__min_samples_leaf':[1, 2, 5, 10, 15, 20]}
+        cpad = sns.color_palette() # The color pad
+        scores, stds = [], []
         parlst = params["rf__"+par]
+        print("Training: ")
+        best_score = -1.0
+        best_model = None
         for parval in parlst:
-            print("-------- %s = %s --------" % (par, str(parval)))
             ppl_rf.set_params(**{"rf__"+par:parval})
-            ppl_rf.fit(X_train, y_train)
-            scores_train.append(ppl_rf.score(X_train, y_train))
-            scores_cv.append(ppl_rf.score(X_test, y_test))
-        plt.plot(parlst, scores_train, "b.-")
-        plt.plot(parlst, scores_cv, "r.-")
-        ax = plt.gca()
+            cvs = cross_val_score(ppl_rf, X_train, y_train, cv=5, scoring='r2')
+            print("%s = %s: %7.5f" % (par, str(parval), cvs.mean()))
+            scores.append(cvs.mean())
+            stds.append(cvs.std())
+            if(cvs.mean() > best_score):
+                best_score = cvs.mean()
+                best_model = parval
+        print()
+        print("Best Model: %s = %s" % (par, str(best_model)))
+        print("Best Score: %7.5f" % (best_score))
+        if(ax == None):
+            fig, ax = plt.subplots(1, 1, figsize=(6,4))
+        ax.plot(parlst, scores, ".-", color="blue")
+        scores = np.array(scores)
+        stds = np.array(stds)
+        ax.fill_between(parlst, scores-stds, scores+stds, color="blue", alpha=0.2)
         ax.set_xlabel(par)
         ax.set_ylabel("r2 score")
         ax.set_xticks(params["rf__"+par])
         ax.set_xticklabels([parval for parval in parlst])
-        return _, _
+        return ppl_rf, ppl_rf.named_steps["rf"]
+        
+        # scores_train, scores_cv = [], []
+        # parlst = params["rf__"+par]
+        # for parval in parlst:
+        #     print("-------- %s = %s --------" % (par, str(parval)))
+        #     ppl_rf.set_params(**{"rf__"+par:parval})
+        #     ppl_rf.fit(X_train, y_train)
+        #     scores_train.append(ppl_rf.score(X_train, y_train))
+        #     scores_cv.append(ppl_rf.score(X_test, y_test))
+        # plt.plot(parlst, scores_train, "b.-")
+        # plt.plot(parlst, scores_cv, "r.-")
+        # ax = plt.gca()
+        # ax.set_xlabel(par)
+        # ax.set_ylabel("r2 score")
+        # ax.set_xticks(params["rf__"+par])
+        # ax.set_xticklabels([parval for parval in parlst])
+        # return _, _
 
 def train_model_ridge_parameters_search():
     ppl_ridge = Pipeline(steps = [('ct', ct), ('ridge', model_ridge)])
@@ -469,17 +645,18 @@ def train_model_xgb_parameters_search(auto=True, par=None, ax=None):
     else:
         # Manually choose parameters and examine their performances
         # Default parameters
-        ppl_xgb.set_params(xgb__n_estimators = 400, xgb__min_child_weight=1, xgb__max_depth=3, xgb__gamma = 0, xgb__learning_rate = 0.1, xgb__subsample = 1, xgb__reg_lambda=1.0)
+        ppl_xgb.set_params(xgb__n_estimators = 400, xgb__min_child_weight=5, xgb__max_depth=2, xgb__gamma = 0, xgb__learning_rate = 0.08, xgb__subsample = 0.7, xgb__reg_lambda=1.0, xgb__reg_alpha=0.3)
         # Use the same train/cv split
         params = { \
-                   'xgb__min_child_weight': [1, 2, 3, 5, 8, 10], \
-                   'xgb__n_estimators': [20, 50, 100, 200, 400, 800], \
+                   # 'xgb__min_child_weight': [1, 2, 3, 5, 8, 10], \
+                   'xgb__min_child_weight': [1, 10, 100, 1000], \
+                   'xgb__n_estimators': [20, 50, 100, 200, 400, 800, 1600, 3200], \
                    'xgb__max_depth': [2, 3, 5, 7, 9], \
                    'xgb__subsample': [0.3, 0.5, 0.7, 0.9], \
-                   'xgb__gamma': [0.0, 0.1, 0.5, 1.0, 5.0], \
+                   'xgb__gamma': [0.0, 0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03, ], \
                    'xgb__learning_rate': [0.01, 0.02, 0.04, 0.08, 0.16, 0.32], \
-                   'xgb__reg_lambda': [0.1, 0.3, 1.0, 3.0, 10.0, 30.0], \
-                   'xgb__reg_alpha': [0.0, 0.3, 1.0, 3.0]
+                   'xgb__reg_lambda': [0.01, 0.05, 0.1, 0.3, 1.0, 3.0, 10.], \
+                   'xgb__reg_alpha': [0.0, 0.1, 0.3, 1.0, 3.0]
         }
         cpad = sns.color_palette() # The color pad
         scores, stds = [], []
@@ -489,7 +666,8 @@ def train_model_xgb_parameters_search(auto=True, par=None, ax=None):
         best_model = None
         for parval in parlst:
             ppl_xgb.set_params(**{"xgb__"+par:parval})
-            cvs = cross_val_score(ppl_xgb, X_train, y_train, cv=5, scoring='r2')
+            # cvs = cross_val_score(ppl_xgb, X_train, y_train, cv=5, scoring='r2')
+            cvs = cross_val_score(ppl_xgb, X, y, cv=5, scoring='r2')
             print("%s = %s: %7.5f" % (par, str(parval), cvs.mean()))
             scores.append(cvs.mean())
             stds.append(cvs.std())
@@ -518,11 +696,14 @@ def train_model_xgb_parameters_search(auto=True, par=None, ax=None):
 # Score for vanilla SGD regressor is: 0.675 (okay let's start from this)
 
 # model, reg_sgd = train_model_sgd_parameters_search(method='grid')
-# model, reg_lasso = train_model_lasso_parameters_search(auto=True)
-# model, reg_ridge = train_model_ridge_parameters_search()
+# model, ppl_lasso = train_model_lasso_parameters_search(auto=True)
+# model, ppl_ridge = train_model_ridge_parameters_search()
 
-# model, reg_rf = train_model_rf_parameters_search(auto=True)
-# model, reg_rf = train_model_rf_parameters_search(auto=False, par='max_depth')
+# rf_params = ['n_estimators', 'max_depth', 'min_samples_split', 'min_samples_leaf']
+# fig, axs = plt.subplots(2,2,figsize=(8,6))
+# axs = axs.flatten()
+# for i, par in enumerate(rf_params):
+#     ppl, reg = train_model_rf_parameters_search(auto=False, par=par, ax=axs[i])
 
 # xgb_params = ['n_estimators', 'min_child_weight', 'max_depth', 'gamma', 'subsample', 'learning_rate', 'reg_lambda', 'reg_alpha']
 # fig, axs = plt.subplots(2,4,figsize=(10,8))
@@ -533,13 +714,52 @@ def train_model_xgb_parameters_search(auto=True, par=None, ax=None):
 
 # CV accuracy is more sensitive to n_estimators, max_depth, learning_rate, subsample, reg_lambda within the parameter range.
 
-ppl_xgb = Pipeline(steps = [('ct', ct), ('xgb', model_xgb)])
-ppl_xgb.set_params(xgb__n_estimators = 400, xgb__min_child_weight=3, xgb__max_depth=3, xgb__gamma = 0, xgb__learning_rate = 0.04, xgb__subsample = 0.5, xgb__reg_lambda=1.0)
+def fit_model(model, X_train, y_train, X_test=None, y_test=None, modelname=None):
+    ppl = Pipeline(steps = [('ct', ct), ('model', model)])
+    ppl.fit(X_train, y_train)
+    if(X_test is not None):
+        y_pred = ppl.predict(X_test)
+        if(modelname): print(modelname)
+        print(np.sqrt(metrics.mean_squared_error(y_test, y_pred)))
+        print(metrics.r2_score(y_test, y_pred))    
+    return ppl
 
-ppl_xgb.fit(X_train, y_train)
-y_pred = ppl_xgb.predict(X_test)
-print(np.sqrt(metrics.mean_squared_error(y_test, y_pred)))
-print(metrics.r2_score(y_test, y_pred))
+kfolds = KFold(n_splits=10, shuffle=True, random_state=42)
+
+model_stack = StackingRegressor(estimators=[('ridge', model_ridge), \
+                                            ('lasso', model_lasso),\
+                                            ('svr', model_svr),\
+                                            ('lgbm', model_lgbm),\
+                                            ('rf', model_rf),\
+                                            ('xgb', model_xgb)],\
+                                cv = kfolds)
+
+X = train_derived.drop('SalePrice', axis=1)
+y = train_derived['SalePrice']
+
+# ppl_ridge = fit_model(model_ridge, X, y, "Ridge")
+# ppl_lasso = fit_model(model_lasso, X, y, "Lasso")
+# ppl_xgb = fit_model(model_xgb, X, y, "XGBoost")
+# ppl_svr = fit_model(model_svr, X, y, "SVR")
+# ppl_rf = fit_model(model_rf, X, y, "Random Forest")
+# ppl_lgbm = fit_model(model_lgbm, X, y, "Light GBM")
+# ppl_stack = fit_model(model_stack, X, y, "Stack")
+
+def cv_rmse(model, X=X):
+    ppl = Pipeline(steps = [('ct', ct), ('model', model)])
+    rmse = np.sqrt(-cross_val_score(ppl, X, y,
+                                    scoring="neg_mean_squared_error",
+                                    cv=kfolds))
+    return (rmse)
+
+# rmse = cv_rmse(ppl_xgb, X=X).mean()
+# cv_rmse(model_ridge, Xtrain, ytrain, "Ridge")
+# cv_rmse(model_svr, Xtrain, ytrain, "SVR")
+# cv_rmse(model_rf, Xtrain, ytrain, "Random Forest")
+# cv_rmse(model_xgb, Xtrain, ytrain, "XGBoost")
+# cv_rmse(model_lgbm, Xtrain, ytrain, "Light GBM")
+# cv_rmse(model_lasso, Xtrain, ytrain, "Lasso")
+
 # xgb.plot_importance(ppl)
 # ppl.feature_importance_
 
@@ -561,4 +781,177 @@ print(metrics.r2_score(y_test, y_pred))
 # Save model for later use:
 # joblib.dump(model, "model_xgb_gsc.dat")
 
+# perm_result_train = permutation_importance(ppl_lasso, X_train, y_train, n_repeats=10, random_state=24)
+# perm_result_test = permutation_importance(ppl_lasso, X_test, y_test, n_repeats=10, random_state=24)
+# perm_sorted_idx = perm_result.importances_mean.argsort()[::-1]
+
+def show_important_features(perm_result_train, perm_result_test, X):
+    '''
+    Display the most important features calculated from the permutation method.
+
+    Parameters:
+    ---
+    perm_result_train: The output from sklearn.inspection.permutation_importance on the training set
+    perm_result_test: On the test set
+    X: The training/test data before applying any pipeline. It is used to extract the features.
+    '''
+    types = ['N/A'] * X.columns.size
+    feature_importance = pd.DataFrame({'mean_train':perm_result_train.importances_mean, \
+                                       'std_train':perm_result_train.importances_std, \
+                                       'mean_test':perm_result_test.importances_mean, \
+                                       'std_test':perm_result_test.importances_std, \
+                                       'type':types}, \
+                                      index=X.columns)
+    feature_importance.loc[num_features, 'type'] = 'numerical'
+    feature_importance.loc[cat_features, 'type'] = 'nominal'
+    feature_importance.loc[ord_features, 'type'] = 'ordinal'
+    feature_importance.sort_values(by='mean_train', ascending=False, inplace=True)
+
+    print("The top 10 Numerical features:")
+    print(feature_importance[feature_importance['type']=='numerical'][:10])
+    print()
+    print("The top 5 Nominal features (nominal):")
+    print(feature_importance[feature_importance['type']=='nominal'][:5])
+    print()
+    print("The top 5 Nominal features (ordinal):")
+    print(feature_importance[feature_importance['type']=='ordinal'][:5])
+
+    sns.set(font_scale = 1.2)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 8), num='feature_importance')
+    sns.barplot(x = feature_importance['mean_train'][:20], \
+                y = feature_importance.index[:20], \
+                hue=feature_importance['type'][:20], \
+                ax=ax1, orient='h', dodge=False)
+    
+    feature_importance.sort_values(by='mean_test', ascending=False, inplace=True)
+    
+    sns.barplot(x = feature_importance['mean_test'][:20], \
+                y = feature_importance.index[:20], \
+                hue=feature_importance['type'][:20], \
+                ax=ax2, orient='h', dodge=False)
+    ax1.set_xscale("log")
+    ax2.set_xscale("log")
+
+    fig.subplots_adjust(left=0.2, wspace=0.30)
+    plt.show()
+
+# show_important_features(perm_result_train, perm_result_test, X)
+
+
+ct.fit(X)
+Xtrain = ct.transform(X)
+model_xgb.fit(Xtrain, y)
+model_lasso.fit(Xtrain, y)
+model_ridge.fit(Xtrain, y)
+model_rf.fit(Xtrain, y)
+model_svr.fit(Xtrain, y)
+#model_lgbm.fit(Xtrain, y)
+model_stack.fit(Xtrain, y)
+
+def predict():
+    test = pd.read_csv("../data/test.csv")
+    testId = test['Id']
+    Xtest = test.copy()
+    Xtest = Xtest.replace(ordinal_feature_encoder)
+    # Xtest['MSSubClass'] = Xtest['MSSubClass'].astype('object')
+    for col in ['MSSubClass', 'MoSold', 'YrSold', 'SaleType', 'SaleCondition']:
+        train_derived[col] = train_derived[col].astype('object')
+    num_features = Xtest.select_dtypes(['int', 'float']).columns
+    for var in drop_features:
+        if(var in Xtest):
+            Xtest = Xtest.drop(var, axis=1)
+    for col in vars_skewed:
+        if(col in Xtest.columns):
+            Xtest[col] = transform_skewed_variables(Xtest[col], method=method_skewed)
+    for var in vars_fill_zero:
+        Xtest[var] = Xtest[var].fillna(0)
+    for var in ord_features:
+        train_derived[var] = train_derived[var].fillna(0)
+        
+    Xtest['TotalSF'] = Xtest['TotalBsmtSF'] + Xtest['1stFlrSF'] + Xtest['2ndFlrSF']
+
+    # Xtest['LotFrontage'] = Xtest.groupby('Neighborhood')['LotFrontage'].transform(lambda x: x.fillna(x.median()))
+
+    # Xtest['AllSF'] = Xtest['GrLivArea'] + Xtest['TotalBsmtSF']
+    # Xtest['Area'] = Xtest['LotArea'] * Xtest['LotFrontage']
+    # Xtest['Area_log'] = np.log1p(Xtest['Area'])
+    # Xtest['Is_MasVnr'] = [1 if i != 0 else 0 for i in Xtest['MasVnrArea']]
+    # Xtest['Is_BsmtFinSF1'] = [1 if i != 0 else 0 for i in Xtest['BsmtFinSF1']]
+    # Xtest['Is_BsmtFinSF2'] = [1 if i != 0 else 0 for i in Xtest['BsmtFinSF2']]
+    # Xtest['Is_BsmtUnfSF'] = [1 if i != 0 else 0 for i in Xtest['BsmtUnfSF']]
+    # Xtest['Is_TotalBsmtSF'] = [1 if i != 0 else 0 for i in Xtest['TotalBsmtSF']]
+    # Xtest['Is_LowQualFinSF'] = [1 if i != 0 else 0 for i in Xtest['LowQualFinSF']]
+    # Xtest['Is_GarageArea'] = [1 if i != 0 else 0 for i in Xtest['GarageArea']]
+    # Xtest['Is_WoodDeckSF'] = [1 if i != 0 else 0 for i in Xtest['WoodDeckSF']]
+    # Xtest['Is_OpenPorchSF'] = [1 if i != 0 else 0 for i in Xtest['OpenPorchSF']]
+    # Xtest['Is_EnclosedPorch'] = [1 if i != 0 else 0 for i in Xtest['EnclosedPorch']]
+    # Xtest['Is_3SsnPorch'] = [1 if i != 0 else 0 for i in Xtest['3SsnPorch']]
+    # Xtest['Is_ScreenPorch'] = [1 if i != 0 else 0 for i in Xtest['ScreenPorch']]
+
+    Xtest = ct.transform(Xtest)
+    pred_ridge = np.exp(model_ridge.predict(Xtest)) - 1.0
+    pred_lasso = np.exp(model_lasso.predict(Xtest)) - 1.0
+    pred_xgb = np.exp(model_xgb.predict(Xtest)) - 1.0
+    pred_stack = np.exp(model_stack.predict(Xtest)) - 1.0
+    pred_svr = np.exp(model_svr.predict(Xtest)) - 1.0
+    pred_rf = np.exp(model_rf.predict(Xtest)) - 1.0
+    pred_lgbm = np.exp(model_lgbm.predict(Xtest)) - 1.0                
+
+    # pred_ridge = np.exp(ppl_ridge.predict(Xtest)) - 1.0
+    # pred_lasso = np.exp(ppl_lasso.predict(Xtest)) - 1.0
+    # pred_xgb = np.exp(ppl_xgb.predict(Xtest)) - 1.0
+    # pred_stack = np.exp(ppl_stack.predict(Xtest)) - 1.0
+    # pred_svr = np.exp(ppl_svr.predict(Xtest)) - 1.0
+    # pred_rf = np.exp(ppl_rf.predict(Xtest)) - 1.0
+    # pred_lgbm = np.exp(ppl_lgbm.predict(Xtest)) - 1.0                
+
+    # pred_ridge = inv_boxcox1p(ppl_ridge.predict(Xtest), 0.15)
+    # pred_lasso = inv_boxcox1p(ppl_lasso.predict(Xtest), 0.15)
+    # pred_xgb = inv_boxcox1p(ppl_xgb.predict(Xtest), 0.15)
+    # pred_rf = inv_boxcox1p(ppl_rf.predict(Xtest), 0.15)
+    # pred_lgbm = inv_boxcox1p(ppl_lgbm.predict(Xtest), 0.15)
+    # pred_svr = inv_boxcox1p(ppl_svr.predict(Xtest), 0.15)
+    # pred_stack = inv_boxcox1p(ppl_stack.predict(Xtest), 0.15)
+
+    pred = 0.5 * pred_stack + \
+        0.1 * pred_lgbm + \
+        0.15 * pred_ridge + \
+        0.15 * pred_lasso + \
+        0.1 * pred_xgb
+
+    # pred = pred_stack
+    # pred = pred_lasso * 0.7 + pred_xgb * 0.3
+
+    out = pd.DataFrame({'Id':testId, 'SalePrice':pred})
+    # q1 = out['SalePrice'].quantile(0.0045)
+    # q2 = out['SalePrice'].quantile(0.99)    
+    # out['SalePrice'] = out['SalePrice'].apply(lambda x: x if x > q1 else x * 0.77)
+    # out['SalePrice'] = out['SalePrice'].apply(lambda x: x if x < q2 else x * 1.1)
+    # out['SalePrice'] *= 1.001619
+    out.to_csv("submission_final.csv", index=False)
+    return out
+
+out = predict()    
+# outcomp = pd.read_csv("../data/sample_submission.csv")
+outcomp = pd.read_csv("./submission_xgb.csv")
+plt.plot(out['SalePrice'], outcomp['SalePrice'], "b,")
+
+# 1. Use boxcox
+# 2. Use stack
+# 3. Remove outliers
+# 4. A fine tuning of the XGB parameter isn't very promising
+
+
+# Best: 0.12509
+# Add 3 outliers: 0.12670
+
 print("Done.")
+
+
+# This one outlier: Id = 2550
+# 948458.4173298003 0.12388
+# 8.e5 0.12241
+# 6.e5 0.12025
+# 3.e5 0.11690
+# 1.e5 0.11729
+

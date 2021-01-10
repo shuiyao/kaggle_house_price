@@ -1,83 +1,83 @@
 {
     "ExterQual":
     {
-	"Ex": 0,
-	"Gd": 1,
-	"TA": 2,
-	"Fa": 3,
-	"Po": 4	
+	"Ex": 5,
+	"Gd": 4,
+	"TA": 3,
+	"Fa": 2,
+	"Po": 1	
     },
     "ExterCond":
     {
-	"Ex": 0,
-	"Gd": 1,
-	"TA": 2,
-	"Fa": 3,
-	"Po": 4	
+	"Ex": 5,
+	"Gd": 4,
+	"TA": 3,
+	"Fa": 2,
+	"Po": 1	
     },
     "BsmtQual":
     {
-	"Ex": 0,
-	"Gd": 1,
-	"TA": 2,
+	"Ex": 6,
+	"Gd": 5,
+	"TA": 4,
 	"Fa": 3,
-	"Po": 4,
-	"NA": 5
+	"Po": 2,
+	"NA": 1
     },
     "BsmtCond":
     {
-	"Ex": 0,
-	"Gd": 1,
-	"TA": 2,
+	"Ex": 6,
+	"Gd": 5,
+	"TA": 4,
 	"Fa": 3,
-	"Po": 4,
-	"NA": 5
+	"Po": 2,
+	"NA": 1
     },
     "BsmtExposure":
     {
-	"Gd": 0,
-	"Av": 1,
-	"Mn": 2,
-	"No": 3,
-	"NA": 4
+	"Gd": 5,
+	"Av": 4,
+	"Mn": 3,
+	"No": 2,
+	"NA": 1
     },
     "BsmtFinType1":
     {
-	"GdQ": 0,
-	"ALQ": 1,
-	"BLQ": 2,
-	"Rec": 3,
-	"LwQ": 4,
-	"Unf": 5,
-	"NA": 6	
+	"GdQ": 7,
+	"ALQ": 6,
+	"BLQ": 5,
+	"Rec": 4,
+	"LwQ": 3,
+	"Unf": 2,
+	"NA": 1	
     },
     "BsmtFinType1":
     {
-	"GLQ": 0,
-	"ALQ": 1,
-	"BLQ": 2,
-	"Rec": 3,
-	"LwQ": 4,
-	"Unf": 5,
-	"NA": 6	
+	"GLQ": 7,
+	"ALQ": 6,
+	"BLQ": 5,
+	"Rec": 4,
+	"LwQ": 3,
+	"Unf": 2,
+	"NA": 1	
     },
     "BsmtFinType2":
     {
-	"GLQ": 0,
-	"ALQ": 1,
-	"BLQ": 2,
-	"Rec": 3,
-	"LwQ": 4,
-	"Unf": 5,
-	"NA": 6	
+	"GLQ": 7,
+	"ALQ": 6,
+	"BLQ": 5,
+	"Rec": 4,
+	"LwQ": 3,
+	"Unf": 2,
+	"NA": 1	
     },
     "HeatingQC":
     {
-	"Ex": 0,
-	"Gd": 1,
-	"TA": 2,
-	"Fa": 3,
-	"Po": 4
+	"Ex": 5,
+	"Gd": 4,
+	"TA": 3,
+	"Fa": 2,
+	"Po": 1
     },
     "CentralAir":
     {
@@ -86,45 +86,45 @@
     },
     "KitchenQual":
     {
-	"Ex": 0,
-	"Gd": 1,
-	"TA": 2,
-	"Fa": 3,
-	"Po": 4
+	"Ex": 5,
+	"Gd": 4,
+	"TA": 3,
+	"Fa": 2,
+	"Po": 1
     },
     "FireplaceQu":
     {
-	"Ex": 0,
-	"Gd": 1,
-	"TA": 2,
+	"Ex": 6,
+	"Gd": 5,
+	"TA": 4,
 	"Fa": 3,
-	"Po": 4,
-	"NA": 5
+	"Po": 2,
+	"NA": 1
     },
     "GarageFinish":
     {
-	"Fin": 0,
-	"RFn": 1,
+	"Fin": 4,
+	"RFn": 3,
 	"Unf": 2,
-	"NA": 3
+	"NA": 1
     },
     "GarageQual":
     {
-	"Ex": 0,
-	"Gd": 1,
-	"TA": 2,
+	"Ex": 6,
+	"Gd": 5,
+	"TA": 4,
 	"Fa": 3,
-	"Po": 4,
-	"NA": 5
+	"Po": 2,
+	"NA": 1
     },
     "GarageCond":
     {
-	"Ex": 0,
-	"Gd": 1,
-	"TA": 2,
+	"Ex": 6,
+	"Gd": 5,
+	"TA": 4,
 	"Fa": 3,
-	"Po": 4,
-	"NA": 5
+	"Po": 2,
+	"NA": 1
     },
     "PavedDrive":
     {
@@ -134,10 +134,10 @@
     },
     "PoolQC":
     {
-	"Ex": 0,
-	"Gd": 1,
-	"TA": 2,
-	"Fa": 3,
-	"NA": 4
+	"Ex": 5,
+	"Gd": 4,
+	"TA": 3,
+	"Fa": 2,
+	"NA": 1
     }
 }
