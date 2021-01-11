@@ -9,7 +9,7 @@ from scipy.stats import skew, pearsonr
 # ================================
 if 'train' not in globals():
     print("Loading data from train.csv.")
-    train = pd.read_csv("train.csv")
+    train = pd.read_csv("../data/train.csv")
     train.info()
     m = train.shape[0]
 
@@ -352,13 +352,16 @@ from sklearn.ensemble import IsolationForest
 #rng = np.random.RandomState(42)
 corrs = train.corrwith(train['SalePrice'], method='spearman').sort_values(ascending=False)
 clf = IsolationForest(max_samples=200, random_state=42, contamination=0.01)
-Xtrain = ct.fit_transform(X)
+# Xtrain = ct.fit_transform(X)
+Xtrain = train[corrs.index]
 
 # clrs = ["blue" if y == 1 else "red" for y in pred]
 markers = {1: ".", -1:"X", -2:"X"}
 # palette = sns.color_palette()
 # plt.scatter(train['GrLivArea'], train['SalePrice'], s=6, color=clrs, marker=".")
 
+imp = SimpleImputer(strategy="median")
+Xtrain = imp.fit_transform(Xtrain)
 clf.fit(Xtrain)
 pred = clf.predict(Xtrain)
 y = clf.decision_function(Xtrain)
